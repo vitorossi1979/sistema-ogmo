@@ -6,7 +6,7 @@ from fpdf import FPDF
 import io
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Sistema OGMO-ES v7.8", layout="wide", page_icon="🚢")
+st.set_page_config(page_title="Sistema OGMO-ES v7.9", layout="wide", page_icon="🚢")
 
 # --- 2. SISTEMA DE SENHA ---
 SENHA_ACESSO = "ogmo123"
@@ -165,7 +165,6 @@ if check_password():
             tipo_painel = "Navios" if opc_admin == "🚢 Requisições de Navios" else "Trabalhadores"
             st.header(f"⚙️ Gerenciamento e Carga de {tipo_painel}")
 
-            # Menu de Abas expandido com monitoramento caso seja Trabalhadores
             abas_lista = ["📋 Importação Direta (Texto)", "📂 Carregar Arquivo (Excel/CSV)", "➕ Inclusão Manual"]
             if tipo_painel == "Trabalhadores":
                 abas_lista.append("👀 Monitorar Escolhas do Turno")
@@ -208,7 +207,6 @@ if check_password():
                             conn.execute("INSERT OR REPLACE INTO trabalhadores VALUES (?,?,?,?,?,?)", (m, n, cb, ce, cr, ca))
                             conn.commit(); st.success("Salvo!"); st.rerun()
 
-            # Monitoramento em Tempo Real das escolhas individuais
             if tipo_painel == "Trabalhadores":
                 with abas[3]:
                     st.subheader("📊 Escolhas Lançadas por Nome")
@@ -227,7 +225,6 @@ if check_password():
                     else:
                         st.dataframe(df_monitoramento, use_container_width=True)
 
-            # --- TRATAMENTO ROBUSTO E SALVAMENTO DE DADOS ---
             if df_para_salvar is not None:
                 st.write("### Prévia dos Dados Identificados:")
                 st.dataframe(df_para_salvar.head(5), use_container_width=True)
@@ -256,9 +253,8 @@ if check_password():
                         st.success(f"Dados de {tipo_painel} importados com sucesso!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Erro de estrutura: Verifique as colunas. Erro: {e}")
+                        st.error(f"Erro de estrutura. Erro técnico: {e}")
 
-            # Seção Inferior: Opções de Campos
             st.write("---")
             st.subheader("📋 Opções de Campos Aceitos")
             if tipo_painel == "Navios":
@@ -279,7 +275,6 @@ if check_password():
                 ]
                 st.table(pd.DataFrame(dados_campos))
 
-            # Exibição do Banco Atual com Edição Inline e Exclusão
             st.subheader(f"Registros Atuais de {tipo_painel}")
             if tipo_painel == "Navios":
                 df_req = pd.read_sql("SELECT id, navio, funcao, vagas FROM requisicoes", conn)
@@ -288,36 +283,24 @@ if check_password():
                     conn.execute("DELETE FROM requisicoes"); conn.execute("DELETE FROM escolhas"); conn.commit(); st.rerun()
             else:
                 df_total = pd.read_sql("SELECT * FROM trabalhadores ORDER BY nome ASC", conn)
-                
-                # Cabeçalho da Lista
-                st.markdown("**Layout: Nome | Matrícula | Câmbios (Básico / Especial / Rodízio / Acordo) | Ações**")
+                st.markdown("**Layout: Nome | Matrícula | Câmbios | Ações**")
                 
                 for index, row in df_total.iterrows():
-                    # Formatação visual inline das informações atuais
                     texto_cambios = f"📅 Básico: {row['cambio_chefe_basico']} | Esp: {row['cambio_chefe_especial']} | Rod: {row['cambio_rodizio']} | Aco: {row['cambio_acordo']}"
-                    
                     c_info, c_edit, c_del = st.columns([6, 1, 1])
                     c_info.write(f"👤 **{row['nome']}** (Matrícula: {row['matricula']})  \n*{texto_cambios}*")
                     
-                    # Estado dinâmico para abrir formulário de edição do trabalhador
-                    key_editar = f"edit_{row['matricula']}"
-                    if c_edit.button("✏️ Editar", key=key_editar):
+                    if c_edit.button("✏️ Editar", key=f"edit_{row['matricula']}"):
                         st.session_state[f"active_edit_{row['matricula']}"] = True
                         
                     if c_del.button("🗑️ Excluir", key=f"del_{row['matricula']}"):
                         conn.execute("DELETE FROM trabalhadores WHERE matricula = ?", (row['matricula'],))
                         conn.execute("DELETE FROM escolhas WHERE matricula = ?", (row['matricula'],))
-                        conn.commit()
-                        st.success(f"Trabalhador {row['nome']} removido!")
-                        st.rerun()
+                        conn.commit(); st.success(f"Trabalhador {row['nome']} removido!"); st.rerun()
                     
-                    # Painel Expansível de Edição se o botão for acionado
                     if st.session_state.get(f"active_edit_{row['matricula']}", False):
                         with st.form(f"form_edicao_{row['matricula']}"):
-                            st.write(f"⚙️ Alterar dados de: {row['nome']}")
                             novo_nome = st.text_input("Nome Completo", value=row['nome']).upper()
-                            
-                            # Parse simples de string para objeto date
                             def para_data(s): return datetime.strptime(s, "%Y-%m-%d").date() if s else date.today()
                             
                             ed1, ed2, ed3, ed4 = st.columns(4)
@@ -333,18 +316,19 @@ if check_password():
                                     SET nome=?, cambio_chefe_basico=?, cambio_chefe_especial=?, cambio_rodizio=?, cambio_acordo=?
                                     WHERE matricula=?
                                 """, (novo_nome, str(ncb), str(nce), str(ncr), str(nca), row['matricula']))
-                                conn.commit()
-                                st.session_state[f"active_edit_{row['matricula']}"] = False
-                                st.success("Atualizado!")
-                                st.rerun()
+                                conn.commit(); st.session_state[f"active_edit_{row['matricula']}"] = False; st.success("Atualizado!"); st.rerun()
                             if ce_cancela.form_submit_button("Cancelar"):
-                                st.session_state[f"active_edit_{row['matricula']}"] = False
-                                st.rerun()
+                                st.session_state[f"active_edit_{row['matricula']}"] = False; st.rerun()
                     st.divider()
 
-        # 2. FECHAMENTO DA ESCALA (COM LOGICA DE DESEMPATE CORRIGIDA)
+        # ================= 2. FECHAMENTO DA ESCALA =================
         elif opc_admin == "⚙️ Fechamento da Escala":
             st.header("⚙️ Fechamento e Processamento da Escala Oficial")
+            
+            # Inicializa gatilhos de exibição e armazenamento temporário da escala rodada
+            if "escala_gerada" not in st.session_state:
+                st.session_state.escala_gerada = None
+
             if st.button("🚀 Executar Alocação de Turno", type="primary", use_container_width=True):
                 vagas = pd.read_sql("SELECT * FROM requisicoes", conn)
                 trabs = pd.read_sql("SELECT * FROM trabalhadores", conn)
@@ -353,7 +337,7 @@ if check_password():
                 resultado = []; ja_escalados = set()
                 vagas_restantes = {r['id']: r['vagas'] for _, r in vagas.iterrows()}
 
-                # Rodada 1: Categoria "Com Câmbio" (Critério: Data do câmbio mais antiga, desempata em matrícula)
+                # Rodada 1: Categoria "Com Câmbio"
                 for _, vaga in vagas.iterrows():
                     f = vaga['funcao']
                     col = {"RODÍZIO": "cambio_rodizio", "CHEFE BÁSICO": "cambio_chefe_basico", "CHEFE ESPECIAL": "cambio_chefe_especial", "ACORDO": "cambio_acordo"}.get(f, "cambio_rodizio")
@@ -364,11 +348,10 @@ if check_password():
                             vagas_restantes[vaga['id']] -= 1; ja_escalados.add(p['matricula'])
                             resultado.append({"Matrícula": p['matricula'], "Nome": p['nome'], "Navio": vaga['navio'], "Função": vaga['funcao'], "Critério": "Com Câmbio"})
 
-                # Rodada 2: Categoria "Sem Câmbio" (CORRIGIDO: Critério absoluto de MENOR MATRÍCULA)
+                # Rodada 2: Categoria "Sem Câmbio"
                 for _, vaga in vagas.iterrows():
                     if vagas_restantes[vaga['id']] > 0:
                         int_sc = escolhas[(escolhas['requisicao_id'] == vaga['id']) & (escolhas['tipo_disputa'] == "Sem Câmbio")]
-                        # Ordena estritamente de forma crescente pela matrícula do trabalhador
                         int_sc = int_sc.merge(trabs, on='matricula').sort_values(by='matricula', ascending=True)
                         for _, p in int_sc.iterrows():
                             if vagas_restantes[vaga['id']] > 0 and p['matricula'] not in ja_escalados:
@@ -376,9 +359,28 @@ if check_password():
                                 resultado.append({"Matrícula": p['matricula'], "Nome": p['nome'], "Navio": vaga['navio'], "Função": vaga['funcao'], "Critério": "Sem Câmbio"})
 
                 if resultado:
+                    st.session_state.escala_gerada = resultado
                     st.success("Escala Oficial Concluída!")
-                    st.dataframe(pd.DataFrame(resultado), use_container_width=True)
-                    pdf_bytes = exportar_pdf(resultado)
-                    st.download_button("📥 Baixar Escala Homologada em PDF", pdf_bytes, f"escala_{date.today().strftime('%Y-%m-%d')}.pdf", "application/pdf")
                 else:
-                    st.error("Nenhuma alocação realizada.")
+                    st.session_state.escala_gerada = None
+                    st.error("Nenhuma alocação realizada com as escolhas atuais.")
+
+            # Se a escala foi gerada com sucesso, exibe o painel de resultados e as ações de finalização
+            if st.session_state.escala_gerada:
+                st.write("---")
+                st.subheader("📋 Resultado Homologado do Turno")
+                st.dataframe(pd.DataFrame(st.session_state.escala_gerada), use_container_width=True)
+                
+                pdf_bytes = exportar_pdf(st.session_state.escala_gerada)
+                
+                # Layout de botões lado a lado para ações pós-escala
+                c_pdf, c_limpar = st.columns([1, 1])
+                c_pdf.download_button("📥 Baixar Escala Homologada em PDF", pdf_bytes, f"escala_{date.today().strftime('%Y-%m-%d')}.pdf", "application/pdf", use_container_width=True)
+                
+                if c_limpar.button("🚨 Limpar Escolhas Deste Turno", type="secondary", use_container_width=True, help="Apaga permanentemente as escolhas enviadas pelos trabalhadores para iniciar um novo ciclo"):
+                    conn.execute("DELETE FROM escolhas")
+                    conn.commit()
+                    st.session_state.escala_gerada = None
+                    st.toast("Tabela de escolhas limpa com sucesso!", icon="🗑️")
+                    st.success("As escolhas foram deletadas. O sistema está pronto para o próximo turno!")
+                    st.rerun()
