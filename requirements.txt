@@ -2,4 +2,3 @@ streamlit
 pandas
 fpdf
 openpyxl
-sqlite3
