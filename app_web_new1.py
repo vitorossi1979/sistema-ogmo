@@ -6,7 +6,7 @@ from fpdf import FPDF
 import io
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Sistema OGMO-ES v7.7", layout="wide", page_icon="🚢")
+st.set_page_config(page_title="Sistema OGMO-ES v7.8", layout="wide", page_icon="🚢")
 
 # --- 2. SISTEMA DE SENHA ---
 SENHA_ACESSO = "ogmo123"
@@ -208,7 +208,7 @@ if check_password():
                             conn.execute("INSERT OR REPLACE INTO trabalhadores VALUES (?,?,?,?,?,?)", (m, n, cb, ce, cr, ca))
                             conn.commit(); st.success("Salvo!"); st.rerun()
 
-            # Se for painel de trabalhadores, renderiza a aba nova de monitoramento
+            # Monitoramento em Tempo Real das escolhas individuais
             if tipo_painel == "Trabalhadores":
                 with abas[3]:
                     st.subheader("📊 Escolhas Lançadas por Nome")
@@ -279,7 +279,7 @@ if check_password():
                 ]
                 st.table(pd.DataFrame(dados_campos))
 
-            # Exibição do Banco Atual com Sistema de Exclusão Individual
+            # Exibição do Banco Atual com Edição Inline e Exclusão
             st.subheader(f"Registros Atuais de {tipo_painel}")
             if tipo_painel == "Navios":
                 df_req = pd.read_sql("SELECT id, navio, funcao, vagas FROM requisicoes", conn)
@@ -289,20 +289,60 @@ if check_password():
             else:
                 df_total = pd.read_sql("SELECT * FROM trabalhadores ORDER BY nome ASC", conn)
                 
-                # Sistema interativo para excluir item por item na listagem
+                # Cabeçalho da Lista
+                st.markdown("**Layout: Nome | Matrícula | Câmbios (Básico / Especial / Rodízio / Acordo) | Ações**")
+                
                 for index, row in df_total.iterrows():
-                    col_nome, col_mat, col_lixo = st.columns([6, 2, 1])
-                    col_nome.write(f"👤 **{row['nome']}**")
-                    col_mat.write(f"Matrícula: {row['matricula']}")
-                    if col_lixo.button("🗑️ Excluir", key=f"del_{row['matricula']}"):
+                    # Formatação visual inline das informações atuais
+                    texto_cambios = f"📅 Básico: {row['cambio_chefe_basico']} | Esp: {row['cambio_chefe_especial']} | Rod: {row['cambio_rodizio']} | Aco: {row['cambio_acordo']}"
+                    
+                    c_info, c_edit, c_del = st.columns([6, 1, 1])
+                    c_info.write(f"👤 **{row['nome']}** (Matrícula: {row['matricula']})  \n*{texto_cambios}*")
+                    
+                    # Estado dinâmico para abrir formulário de edição do trabalhador
+                    key_editar = f"edit_{row['matricula']}"
+                    if c_edit.button("✏️ Editar", key=key_editar):
+                        st.session_state[f"active_edit_{row['matricula']}"] = True
+                        
+                    if c_del.button("🗑️ Excluir", key=f"del_{row['matricula']}"):
                         conn.execute("DELETE FROM trabalhadores WHERE matricula = ?", (row['matricula'],))
                         conn.execute("DELETE FROM escolhas WHERE matricula = ?", (row['matricula'],))
                         conn.commit()
                         st.success(f"Trabalhador {row['nome']} removido!")
                         st.rerun()
-                st.write("---")
+                    
+                    # Painel Expansível de Edição se o botão for acionado
+                    if st.session_state.get(f"active_edit_{row['matricula']}", False):
+                        with st.form(f"form_edicao_{row['matricula']}"):
+                            st.write(f"⚙️ Alterar dados de: {row['nome']}")
+                            novo_nome = st.text_input("Nome Completo", value=row['nome']).upper()
+                            
+                            # Parse simples de string para objeto date
+                            def para_data(s): return datetime.strptime(s, "%Y-%m-%d").date() if s else date.today()
+                            
+                            ed1, ed2, ed3, ed4 = st.columns(4)
+                            ncb = ed1.date_input("Chefe Básico", para_data(row['cambio_chefe_basico']))
+                            nce = ed2.date_input("Chefe Especial", para_data(row['cambio_chefe_especial']))
+                            ncr = ed3.date_input("Rodízio", para_data(row['cambio_rodizio']))
+                            nca = ed4.date_input("Acordo", para_data(row['cambio_acordo']))
+                            
+                            ce_salvar, ce_cancela = st.columns([1, 1])
+                            if ce_salvar.form_submit_button("💾 Salvar Alterações"):
+                                conn.execute("""
+                                    UPDATE trabalhadores 
+                                    SET nome=?, cambio_chefe_basico=?, cambio_chefe_especial=?, cambio_rodizio=?, cambio_acordo=?
+                                    WHERE matricula=?
+                                """, (novo_nome, str(ncb), str(nce), str(ncr), str(nca), row['matricula']))
+                                conn.commit()
+                                st.session_state[f"active_edit_{row['matricula']}"] = False
+                                st.success("Atualizado!")
+                                st.rerun()
+                            if ce_cancela.form_submit_button("Cancelar"):
+                                st.session_state[f"active_edit_{row['matricula']}"] = False
+                                st.rerun()
+                    st.divider()
 
-        # 2. FECHAMENTO DA ESCALA
+        # 2. FECHAMENTO DA ESCALA (COM LOGICA DE DESEMPATE CORRIGIDA)
         elif opc_admin == "⚙️ Fechamento da Escala":
             st.header("⚙️ Fechamento e Processamento da Escala Oficial")
             if st.button("🚀 Executar Alocação de Turno", type="primary", use_container_width=True):
@@ -313,7 +353,7 @@ if check_password():
                 resultado = []; ja_escalados = set()
                 vagas_restantes = {r['id']: r['vagas'] for _, r in vagas.iterrows()}
 
-                # Rodada 1: Com Câmbio
+                # Rodada 1: Categoria "Com Câmbio" (Critério: Data do câmbio mais antiga, desempata em matrícula)
                 for _, vaga in vagas.iterrows():
                     f = vaga['funcao']
                     col = {"RODÍZIO": "cambio_rodizio", "CHEFE BÁSICO": "cambio_chefe_basico", "CHEFE ESPECIAL": "cambio_chefe_especial", "ACORDO": "cambio_acordo"}.get(f, "cambio_rodizio")
@@ -324,11 +364,12 @@ if check_password():
                             vagas_restantes[vaga['id']] -= 1; ja_escalados.add(p['matricula'])
                             resultado.append({"Matrícula": p['matricula'], "Nome": p['nome'], "Navio": vaga['navio'], "Função": vaga['funcao'], "Critério": "Com Câmbio"})
 
-                # Rodada 2: Sem Câmbio
+                # Rodada 2: Categoria "Sem Câmbio" (CORRIGIDO: Critério absoluto de MENOR MATRÍCULA)
                 for _, vaga in vagas.iterrows():
                     if vagas_restantes[vaga['id']] > 0:
                         int_sc = escolhas[(escolhas['requisicao_id'] == vaga['id']) & (escolhas['tipo_disputa'] == "Sem Câmbio")]
-                        int_sc = int_sc.merge(trabs, on='matricula').sort_values(by='matricula')
+                        # Ordena estritamente de forma crescente pela matrícula do trabalhador
+                        int_sc = int_sc.merge(trabs, on='matricula').sort_values(by='matricula', ascending=True)
                         for _, p in int_sc.iterrows():
                             if vagas_restantes[vaga['id']] > 0 and p['matricula'] not in ja_escalados:
                                 vagas_restantes[vaga['id']] -= 1; ja_escalados.add(p['matricula'])
