@@ -3,9 +3,10 @@ import pandas as pd
 import sqlite3
 from datetime import date, datetime
 from fpdf import FPDF
+import io
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Sistema OGMO-ES v7.0", layout="wide", page_icon="🚢")
+st.set_page_config(page_title="Sistema OGMO-ES v7.5", layout="wide", page_icon="🚢")
 
 # --- 2. SISTEMA DE SENHA ---
 SENHA_ACESSO = "ogmo123"
@@ -13,7 +14,6 @@ SENHA_ACESSO = "ogmo123"
 def check_password():
     if "password_correct" not in st.session_state:
         st.title("🚢 Portal de Escalação OGMO-ES")
-        st.write("Insira a credencial para acessar o painel integrado.")
         senha = st.text_input("Senha de Acesso:", type="password")
         if st.button("Entrar no Sistema"):
             if senha == SENHA_ACESSO:
@@ -44,8 +44,31 @@ if check_password():
 
     conn = init_db()
 
-    # --- 4. FUNÇÃO ROBUSTA PARA LER PLANILHAS ---
-    def ler_planilha(file):
+    # --- 4. ENGINE TRATAMENTO DE TEXTO/PLANILHA (IGUAL À IMAGEM) ---
+    def processar_texto_puro(texto, separador, formato):
+        if not texto.strip():
+            return None
+        try:
+            # Converte a string colada em um arquivo virtual na memória
+            data_io = io.StringIO(texto.strip())
+            
+            # Define o separador
+            sep = ',' if separador == "Vírgula" else ';' if separador == "Ponto e Vírgula" else '\t'
+            
+            if formato == "CSV":
+                return pd.read_csv(data_io, sep=sep, encoding='utf-8')
+            elif formato == "JSON":
+                return pd.read_json(data_io)
+            else: # Detecção automática de CSV text/tabulado
+                # Se contiver tabulação (geralmente quando copia do Excel e cola direto)
+                if '\t' in texto:
+                    return pd.read_csv(data_io, sep='\t')
+                return pd.read_csv(data_io, sep=None, engine='python')
+        except Exception as e:
+            st.error(f"Erro ao processar o texto digitado: {e}")
+            return None
+
+    def ler_planilha_arquivo(file):
         if file.name.endswith('xlsx'):
             return pd.read_excel(file)
         else:
@@ -59,7 +82,7 @@ if check_password():
             file.seek(0)
             return pd.read_csv(file, sep=None, engine='python', encoding='iso-8859-1')
 
-    # --- 5. FUNÇÃO PARA GERAR PDF (Ajustada para evitar quebras) ---
+    # --- 5. FUNÇÃO PDF ---
     def exportar_pdf(dados):
         pdf = FPDF()
         pdf.add_page()
@@ -68,7 +91,6 @@ if check_password():
         pdf.set_font("Arial", "", 10)
         pdf.cell(190, 10, f"Data: {date.today().strftime('%d/%m/%Y')}", ln=True, align="C")
         pdf.ln(10)
-
         pdf.set_fill_color(200, 200, 200)
         pdf.set_font("Arial", "B", 10)
         pdf.cell(25, 10, "Matricula", 1, 0, "C", True)
@@ -76,7 +98,6 @@ if check_password():
         pdf.cell(45, 10, "Navio", 1, 0, "C", True)
         pdf.cell(25, 10, "Funcao", 1, 0, "C", True)
         pdf.cell(20, 10, "Tipo", 1, 1, "C", True)
-
         pdf.set_font("Arial", "", 9)
         for res in dados:
             pdf.cell(25, 10, str(res["Matrícula"]), 1)
@@ -84,10 +105,9 @@ if check_password():
             pdf.cell(45, 10, str(res["Navio"]), 1)
             pdf.cell(25, 10, str(res["Função"]), 1)
             pdf.cell(20, 10, str(res["Critério"]), 1, 1)
-
         return pdf.output(dest='S').encode('latin-1', 'replace')
 
-    # --- 6. NAVEGAÇÃO DE PERFIS (MELHORADA) ---
+    # --- 6. BARRA LATERAL ---
     st.sidebar.title("🚢 Painel Integrado")
     perfil = st.sidebar.radio("Selecione seu Perfil:", ["👤 Portal do Trabalhador", "⚙️ Painel do Administrador"])
     st.sidebar.divider()
@@ -102,39 +122,31 @@ if check_password():
             reqs = pd.read_sql("SELECT * FROM requisicoes", conn)
             
             if df_trabs.empty or reqs.empty:
-                st.warning("⚠️ Sistema indisponível para lançamentos no momento. Aguarde o preenchimento dos navios do dia.")
+                st.warning("⚠️ Sistema indisponível para lançamentos no momento. Aguarde as requisições de hoje.")
             else:
                 lista_trabs = [f"{r['matricula']} - {r['nome']}" for _, r in df_trabs.iterrows()]
-                trab_sel = st.selectbox("Selecione seu Nome/Matrícula para Iniciar:", lista_trabs)
+                trab_sel = st.selectbox("Selecione seu Nome/Matrícula:", lista_trabs)
                 mat_atual = int(trab_sel.split(" - ")[0])
 
                 if "lista_escolhas" not in st.session_state: st.session_state.lista_escolhas = []
                 
-                st.write("---")
                 col_vaga, col_tipo, col_btn = st.columns([3, 2, 1])
                 vaga_sel = col_vaga.selectbox("Vaga do Navio", [f"{r['id']} | {r['navio']} ({r['funcao']})" for _, r in reqs.iterrows()])
                 tipo_sel = col_tipo.radio("Tipo de Disputa:", ["Com Câmbio", "Sem Câmbio"], horizontal=True)
                 
                 if col_btn.button("➕ Adicionar Vaga"):
-                    st.session_state.lista_escolhas.append({
-                        "vaga_id": int(vaga_sel.split(" | ")[0]), 
-                        "vaga_txt": vaga_sel, 
-                        "tipo": tipo_sel
-                    })
+                    st.session_state.lista_escolhas.append({"vaga_id": int(vaga_sel.split(" | ")[0]), "vaga_txt": vaga_sel, "tipo": tipo_sel})
 
                 if st.session_state.lista_escolhas:
-                    st.write("### Suas Opções Selecionadas:")
                     for i, item in enumerate(st.session_state.lista_escolhas):
                         st.info(f"🎯 **{i+1}ª Opção:** {item['vaga_txt']} — Modo: **{item['tipo']}**")
-                    
-                    if st.button("🗑️ Limpar Opções da Lista"):
+                    if st.button("🗑️ Limpar Opções"):
                         st.session_state.lista_escolhas = []
                         st.rerun()
 
-                st.write("---")
-                if st.button("💾 CONFIRMAR E GRAVAR MINHAS PREFERÊNCIAS", type="primary", use_container_width=True):
+                if st.button("💾 CONFIRMAR E GRAVAR PREFERÊNCIAS", type="primary", use_container_width=True):
                     if not st.session_state.lista_escolhas:
-                        st.error("Adicione ao menos uma opção antes de submeter.")
+                        st.error("Sua lista está vazia.")
                     else:
                         conn.execute("DELETE FROM escolhas WHERE matricula = ?", (mat_atual,))
                         for i, item in enumerate(st.session_state.lista_escolhas):
@@ -142,57 +154,121 @@ if check_password():
                                          (mat_atual, i+1, item['vaga_id'], item['tipo']))
                         conn.commit()
                         st.session_state.lista_escolhas = []
-                        st.balloons()
-                        st.success("Suas escolhas foram registradas no sistema!")
+                        st.balloons(); st.success("Escolhas gravadas!")
 
         elif opc_trab == "📊 Quadro de Vagas":
-            st.header("📊 Quadro Geral de Vagas do Turno")
-            df_req = pd.read_sql("SELECT navio as 'Navio', funcao as 'Função', vagas as 'Quantidade Vagas' FROM requisicoes", conn)
-            if df_req.empty:
-                st.info("Nenhum navio ativo lançado para o dia de hoje.")
-            else:
-                st.dataframe(df_req, use_container_width=True)
+            st.header("📊 Quadro Geral de Vagas")
+            df_req = pd.read_sql("SELECT navio as 'Navio', funcao as 'Função', vagas as 'Vagas' FROM requisicoes", conn)
+            st.dataframe(df_req, use_container_width=True)
 
     # ================= ÁREA DO ADMINISTRADOR =================
     elif perfil == "⚙️ Painel do Administrador":
         opc_admin = st.sidebar.radio("Funções Administrativas:", ["🚢 Requisições de Navios", "⚙️ Fechamento da Escala", "👤 Gestão de Trabalhadores"])
 
-        # 1. GERIR NAVIOS
-        if opc_admin == "🚢 Requisições de Navios":
-            st.header("🚢 Gerenciamento de Navios e Vagas")
+        # INTERFACE DA IMAGEM IMPLEMENTADA AQUI (NAVIOS OU TRABALHADORES)
+        if opc_admin == "🚢 Requisições de Navios" or opc_admin == "👤 Gestão de Trabalhadores":
+            tipo_painel = "Navios" if opc_admin == "🚢 Requisições de Navios" else "Trabalhadores"
+            st.header(f"⚙️ Gerenciamento e Carga de {tipo_painel}")
+
+            # Criando o Menu de Abas idêntico ao topo da sua imagem
+            aba1, aba2, aba3 = st.tabs(["📋 Importação Direta (Texto)", "📂 Carregar Arquivo (Excel/CSV)", "➕ Inclusão Manual"])
             
-            with st.expander("📥 Importação por Planilha (Lote)"):
-                file_navios = st.file_uploader("Upload de arquivo de Navios:", type=['xlsx', 'csv'])
-                if file_navios:
-                    df_imp = ler_planilha(file_navios)
-                    st.dataframe(df_imp.head(3))
-                    if st.button("Processar Carga de Navios"):
-                        for _, r in df_imp.iterrows():
-                            conn.execute("INSERT INTO requisicoes (navio, funcao, vagas) VALUES (?,?,?)", 
-                                         (str(r['navio']).upper(), str(r['funcao']).upper(), int(r['vagas'])))
-                        conn.commit(); st.success("Navios inseridos!"); st.rerun()
+            df_para_salvar = None
 
-            with st.form("form_navio"):
-                st.subheader("Cadastro Manual de Vaga")
-                col1, col2, col3 = st.columns(3)
-                navio = col1.text_input("Nome do Navio").upper()
-                funcao = col2.selectbox("Função", ["RODÍZIO", "CHEFE BÁSICO", "CHEFE ESPECIAL", "ACORDO"])
-                vagas = col3.number_input("Vagas", min_value=1, step=1)
-                if st.form_submit_button("Adicionar Vaga"):
-                    conn.execute("INSERT INTO requisicoes (navio, funcao, vagas) VALUES (?,?,?)", (navio, funcao, vagas))
-                    conn.commit(); st.success("Vaga adicionada!"); st.rerun()
+            with aba1:
+                st.write("Cole os dados copiados diretamente das suas colunas do Excel ou bloco de notas:")
+                texto_colado = st.text_area("Data", height=150, help="Insira dados em formato estruturado (colunas separadas por espaço ou tabulação)", placeholder="Insira os dados aqui...", key=f"txt_{tipo_painel}")
+                
+                c1, c2 = st.columns(2)
+                formato_sel = c1.selectbox("Format*", ["Detecção automática", "CSV", "JSON"], key=f"f_{tipo_painel}")
+                separador_sel = c2.selectbox("CSV Delimiter", ["Detecção automática", "Ponto e Vírgula", "Vírgula", "Tabulação"], key=f"s_{tipo_painel}")
+                
+                if texto_colado:
+                    df_para_salvar = processar_texto_puro(texto_colado, separador_sel, formato_sel)
 
-            st.subheader("Vagas Registradas")
-            df_req = pd.read_sql("SELECT id, navio, funcao, vagas FROM requisicoes", conn)
-            st.dataframe(df_req, use_container_width=True)
-            if st.button("🚨 Limpar Todas as Vagas e Escolhas", type="primary"):
-                conn.execute("DELETE FROM requisicoes"); conn.execute("DELETE FROM escolhas")
-                conn.commit(); st.rerun()
+            with aba2:
+                file_upload = st.file_uploader("Escolha o arquivo para upload:", type=['xlsx', 'csv'], key=f"file_{tipo_painel}")
+                if file_upload:
+                    df_para_salvar = ler_planilha_arquivo(file_upload)
 
-        # 2. PROCESSAR ESCALA (REGRA FILA DUPLA)
+            with aba3:
+                if tipo_painel == "Navios":
+                    with st.form("f_manual_n"):
+                        navio = st.text_input("Nome do Navio").upper()
+                        funcao = st.selectbox("Função", ["RODÍZIO", "CHEFE BÁSICO", "CHEFE ESPECIAL", "ACORDO"])
+                        vagas = st.number_input("Vagas", min_value=1, step=1)
+                        if st.form_submit_button("Adicionar Registro"):
+                            conn.execute("INSERT INTO requisicoes (navio, funcao, vagas) VALUES (?,?,?)", (navio, funcao, vagas))
+                            conn.commit(); st.success("Adicionado!"); st.rerun()
+                else:
+                    with st.form("f_manual_t"):
+                        m = st.number_input("Matrícula", step=1)
+                        n = st.text_input("Nome Completo").upper()
+                        col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+                        d = date.today()
+                        cb = col_d1.date_input("Chefe Básico", d); ce = col_d2.date_input("Chefe Especial", d)
+                        cr = col_d3.date_input("Rodízio", d); ca = col_d4.date_input("Acordo", d)
+                        if st.form_submit_button("Salvar Trabalhador"):
+                            conn.execute("INSERT OR REPLACE INTO trabalhadores VALUES (?,?,?,?,?,?)", (m, n, cb, ce, cr, ca))
+                            conn.commit(); st.success("Salvo!"); st.rerun()
+
+            # Se houver dados detectados nas abas 1 ou 2, mostra o botão "Enviar" estilizado como na imagem
+            if df_para_salvar is not None:
+                st.write("### Prévia dos Dados Identificados:")
+                st.dataframe(df_para_salvar.head(5), use_container_width=True)
+                
+                col_btn_cancela, col_btn_envia = st.columns([10, 1])
+                if col_btn_envia.button("Enviar", type="primary", use_container_width=True):
+                    try:
+                        if tipo_painel == "Navios":
+                            for _, r in df_para_salvar.iterrows():
+                                conn.execute("INSERT INTO requisicoes (navio, funcao, vagas) VALUES (?,?,?)", 
+                                             (str(r['navio']).upper(), str(r['funcao']).upper(), int(r['vagas'])))
+                        else:
+                            for _, r in df_para_salvar.iterrows():
+                                conn.execute("INSERT OR REPLACE INTO trabalhadores VALUES (?,?,?,?,?,?)", 
+                                             (int(r['matricula']), str(r['nome']).upper(), str(r['cambio_chefe_basico']), 
+                                              str(r['cambio_chefe_especial']), str(r['cambio_rodizio']), str(r['cambio_acordo'])))
+                        conn.commit()
+                        st.success(f"Dados de {tipo_painel} importados com sucesso!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao salvar dados no banco: Verifique os nomes das colunas. Erro: {e}")
+
+            # Seção Inferior: Opções de Campos (Idêntica ao rodapé da imagem)
+            st.write("---")
+            st.subheader("📋 Opções de Campos Aceitos")
+            if tipo_painel == "Navios":
+                dados_campos = [
+                    {"CAMPO": "navio", "OBRIGATÓRIO": "✔", "ACESSADOR": "—", "DESCRIÇÃO": "Nome do navio (Texto)"},
+                    {"CAMPO": "funcao", "OBRIGATÓRIO": "✔", "ACESSADOR": "—", "DESCRIÇÃO": "Função (RODÍZIO, CHEFE BÁSICO, CHEFE ESPECIAL, ACORDO)"},
+                    {"CAMPO": "vagas", "OBRIGATÓRIO": "✔", "ACESSADOR": "—", "DESCRIÇÃO": "Quantidade de vagas disponíveis (Número)"}
+                ]
+            else:
+                dados_campos = [
+                    {"CAMPO": "matricula", "OBRIGATÓRIO": "✔", "ACESSADOR": "—", "DESCRIÇÃO": "Número de matrícula único (Número)"},
+                    {"CAMPO": "nome", "OBRIGATÓRIO": "✔", "ACESSADOR": "id", "DESCRIÇÃO": "Nome completo do trabalhador (Texto)"},
+                    {"CAMPO": "cambio_chefe_basico", "OBRIGATÓRIO": "✔", "ACESSADOR": "—", "DESCRIÇÃO": "Data do câmbio (AAAA-MM-DD)"},
+                    {"CAMPO": "cambio_chefe_especial", "OBRIGATÓRIO": "✔", "ACESSADOR": "—", "DESCRIÇÃO": "Data do câmbio (AAAA-MM-DD)"},
+                    {"CAMPO": "cambio_rodizio", "OBRIGATÓRIO": "✔", "ACESSADOR": "—", "DESCRIÇÃO": "Data do câmbio (AAAA-MM-DD)"},
+                    {"CAMPO": "cambio_acordo", "OBRIGATÓRIO": "✔", "ACESSADOR": "—", "DESCRIÇÃO": "Data do câmbio (AAAA-MM-DD)"}
+                ]
+            st.table(pd.DataFrame(dados_campos))
+
+            # Exibição do Banco Atual embaixo
+            st.subheader(f"Registros Atuais de {tipo_painel} no Sistema")
+            if tipo_painel == "Navios":
+                df_req = pd.read_sql("SELECT id, navio, funcao, vagas FROM requisicoes", conn)
+                st.dataframe(df_req, use_container_width=True)
+                if st.button("🚨 Limpar Todas as Vagas e Escolhas do Turno"):
+                    conn.execute("DELETE FROM requisicoes"); conn.execute("DELETE FROM escolhas"); conn.commit(); st.rerun()
+            else:
+                df_total = pd.read_sql("SELECT * FROM trabalhadores ORDER BY nome ASC", conn)
+                st.dataframe(df_total, use_container_width=True)
+
+        # 2. FECHAMENTO DA ESCALA
         elif opc_admin == "⚙️ Fechamento da Escala":
             st.header("⚙️ Fechamento e Processamento da Escala Oficial")
-            
             if st.button("🚀 Executar Alocação de Turno", type="primary", use_container_width=True):
                 vagas = pd.read_sql("SELECT * FROM requisicoes", conn)
                 trabs = pd.read_sql("SELECT * FROM trabalhadores", conn)
@@ -201,7 +277,7 @@ if check_password():
                 resultado = []; ja_escalados = set()
                 vagas_restantes = {r['id']: r['vagas'] for _, r in vagas.iterrows()}
 
-                # Rodada 1: Com Câmbio (Desempate por data antiga)
+                # Rodada 1: Com Câmbio
                 for _, vaga in vagas.iterrows():
                     f = vaga['funcao']
                     col = {"RODÍZIO": "cambio_rodizio", "CHEFE BÁSICO": "cambio_chefe_basico", "CHEFE ESPECIAL": "cambio_chefe_especial", "ACORDO": "cambio_acordo"}.get(f, "cambio_rodizio")
@@ -212,7 +288,7 @@ if check_password():
                             vagas_restantes[vaga['id']] -= 1; ja_escalados.add(p['matricula'])
                             resultado.append({"Matrícula": p['matricula'], "Nome": p['nome'], "Navio": vaga['navio'], "Função": vaga['funcao'], "Critério": "Com Câmbio"})
 
-                # Rodada 2: Sem Câmbio (Desempate por menor matrícula)
+                # Rodada 2: Sem Câmbio
                 for _, vaga in vagas.iterrows():
                     if vagas_restantes[vaga['id']] > 0:
                         int_sc = escolhas[(escolhas['requisicao_id'] == vaga['id']) & (escolhas['tipo_disputa'] == "Sem Câmbio")]
@@ -225,80 +301,7 @@ if check_password():
                 if resultado:
                     st.success("Escala Oficial Concluída!")
                     st.dataframe(pd.DataFrame(resultado), use_container_width=True)
-                    
-                    # Geração de PDF integrada
                     pdf_bytes = exportar_pdf(resultado)
                     st.download_button("📥 Baixar Escala Homologada em PDF", pdf_bytes, f"escala_{date.today().strftime('%Y-%m-%d')}.pdf", "application/pdf")
                 else:
-                    st.error("Nenhuma alocação realizada. Verifique se os trabalhadores lançaram escolhas.")
-
-        # 3. GESTÃO DE TRABALHADORES (CADASTRO MANUAL E VIA PLANILHA UNIFICADOS)
-        elif opc_admin == "👤 Gestão de Trabalhadores":
-            st.header("👤 Administração da Base de Avulsos")
-            
-            with st.expander("📥 Importar Trabalhadores por Planilha"):
-                file_t = st.file_uploader("Upload da Base:", type=['xlsx', 'csv'], key="base_t_up")
-                if file_t:
-                    df_t = ler_planilha(file_t)
-                    if st.button("Confirmar Carga do Banco de Dados"):
-                        for _, r in df_t.iterrows():
-                            conn.execute("INSERT OR REPLACE INTO trabalhadores VALUES (?,?,?,?,?,?)", 
-                                         (int(r['matricula']), str(r['nome']).upper(), str(r['cambio_chefe_basico']), 
-                                          str(r['cambio_chefe_especial']), str(r['cambio_rodizio']), str(r['cambio_acordo'])))
-                        conn.commit(); st.success("Base atualizada com sucesso!"); st.rerun()
-
-            # Ajuste de Layout: Redundâncias de campos removidas
-            with st.form("cad_manual"):
-                st.subheader("Inclusão Manual")
-                c1, c2 = st.columns(2)
-                m = c1.number_input("Matrícula", step=1)
-                n = c2.text_input("Nome Completo").upper()
-                
-                col1, col2, col3, col4 = st.columns(4)
-                d = date.today()
-                cb = col1.date_input("Câmbio Chefe Básico", d)
-                ce = col2.date_input("Câmbio Chefe Especial", d)
-                cr = col3.date_input("Câmbio Rodízio", d)
-                ca = col4.date_input("Câmbio Acordo", d)
-                
-                if st.form_submit_button("Salvar Registro"):
-                    conn.execute("INSERT OR REPLACE INTO trabalhadores VALUES (?,?,?,?,?,?)", (m, n, cb, ce, cr, ca))
-                    conn.commit(); st.success(f"{n} cadastrado!"); st.rerun()
-
-            # Seção para Editar/Remover cadastros individuais existente no seu script
-            st.write("---")
-            st.subheader("Manutenção de Registros")
-            df_total = pd.read_sql("SELECT * FROM trabalhadores ORDER BY nome ASC", conn)
-            
-            if not df_total.empty:
-                lista_trabs = [f"{row['matricula']} - {row['nome']}" for _, row in df_total.iterrows()]
-                sel = st.selectbox("Selecione um profissional para Modificar/Excluir:", ["Nenhum"] + lista_trabs)
-
-                if sel != "Nenhum":
-                    m_sel = int(sel.split(" - ")[0])
-                    d_at = df_total[df_total['matricula'] == m_sel].iloc[0]
-
-                    with st.form("edit"):
-                        st.subheader(f"Modificar dados de: {d_at['nome']}")
-                        novo_n = st.text_input("Nome", value=d_at['nome']).upper()
-                        
-                        def parse_dt(d_str): 
-                            return datetime.strptime(d_str, '%Y-%m-%d').date() if isinstance(d_str, str) else d_str
-                        
-                        nc1 = st.date_input("Câmbio Chefe Básico", parse_dt(d_at['cambio_chefe_basico']))
-                        nc2 = st.date_input("Câmbio Chefe Especial", parse_dt(d_at['cambio_chefe_especial']))
-                        nc3 = st.date_input("Câmbio Rodízio", parse_dt(d_at['cambio_rodizio']))
-                        nc4 = st.date_input("Câmbio Acordo", parse_dt(d_at['cambio_acordo']))
-                        
-                        if st.form_submit_button("Salvar Alterações"):
-                            conn.execute("""UPDATE trabalhadores SET 
-                                         nome=?, cambio_chefe_basico=?, cambio_chefe_especial=?, cambio_rodizio=?, cambio_acordo=? 
-                                         WHERE matricula=?""", (novo_n, nc1, nc2, nc3, nc4, m_sel))
-                            conn.commit(); st.success("Atualizado!"); st.rerun()
-
-                    if st.button("❌ REMOVER TRABALHADOR DO SISTEMA", type="primary"):
-                        conn.execute("DELETE FROM trabalhadores WHERE matricula=?", (m_sel,))
-                        conn.commit(); st.success("Profissional removido!"); st.rerun()
-
-            st.subheader("Tabela Geral de Avulsos Cadastrados")
-            st.dataframe(df_total, use_container_width=True)
+                    st.error("Nenhuma alocação realizada.")
