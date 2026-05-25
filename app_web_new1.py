@@ -6,7 +6,7 @@ from fpdf import FPDF
 import io
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Sistema OGMO-ES v7.6", layout="wide", page_icon="🚢")
+st.set_page_config(page_title="Sistema OGMO-ES v7.7", layout="wide", page_icon="🚢")
 
 # --- 2. SISTEMA DE SENHA ---
 SENHA_ACESSO = "ogmo123"
@@ -165,28 +165,29 @@ if check_password():
             tipo_painel = "Navios" if opc_admin == "🚢 Requisições de Navios" else "Trabalhadores"
             st.header(f"⚙️ Gerenciamento e Carga de {tipo_painel}")
 
-            # Menu de Abas (Igual à sua imagem)
-            aba1, aba2, aba3 = st.tabs(["📋 Importação Direta (Texto)", "📂 Carregar Arquivo (Excel/CSV)", "➕ Inclusão Manual"])
-            
+            # Menu de Abas expandido com monitoramento caso seja Trabalhadores
+            abas_lista = ["📋 Importação Direta (Texto)", "📂 Carregar Arquivo (Excel/CSV)", "➕ Inclusão Manual"]
+            if tipo_painel == "Trabalhadores":
+                abas_lista.append("👀 Monitorar Escolhas do Turno")
+
+            abas = st.tabs(abas_lista)
             df_para_salvar = None
 
-            with aba1:
+            with abas[0]:
                 st.write("Cole os dados copiados diretamente das suas colunas do Excel ou bloco de notas:")
                 texto_colado = st.text_area("Data", height=150, help="Insira dados em formato estruturado", placeholder="Insira os dados aqui...", key=f"txt_{tipo_painel}")
-                
                 c1, c2 = st.columns(2)
                 formato_sel = c1.selectbox("Format*", ["Detecção automática", "CSV", "JSON"], key=f"f_{tipo_painel}")
                 separador_sel = c2.selectbox("CSV Delimiter", ["Detecção automática", "Ponto e Vírgula", "Vírgula", "Tabulação"], key=f"s_{tipo_painel}")
-                
                 if texto_colado:
                     df_para_salvar = processar_texto_puro(texto_colado, separador_sel, formato_sel)
 
-            with aba2:
+            with abas[1]:
                 file_upload = st.file_uploader("Escolha o arquivo para upload:", type=['xlsx', 'csv'], key=f"file_{tipo_painel}")
                 if file_upload:
                     df_para_salvar = ler_planilha_arquivo(file_upload)
 
-            with aba3:
+            with abas[2]:
                 if tipo_painel == "Navios":
                     with st.form("f_manual_n"):
                         navio = st.text_input("Nome do Navio").upper()
@@ -207,6 +208,25 @@ if check_password():
                             conn.execute("INSERT OR REPLACE INTO trabalhadores VALUES (?,?,?,?,?,?)", (m, n, cb, ce, cr, ca))
                             conn.commit(); st.success("Salvo!"); st.rerun()
 
+            # Se for painel de trabalhadores, renderiza a aba nova de monitoramento
+            if tipo_painel == "Trabalhadores":
+                with abas[3]:
+                    st.subheader("📊 Escolhas Lançadas por Nome")
+                    query_escolhas = """
+                        SELECT t.nome as 'Trabalhador', t.matricula as 'Matrícula', 
+                               e.prioridade as 'Preferência (Opção)', r.navio as 'Navio Escolhido', 
+                               r.funcao as 'Função da Vaga', e.tipo_disputa as 'Tipo de Disputa'
+                        FROM escolhas e
+                        JOIN trabalhadores t ON e.matricula = t.matricula
+                        JOIN requisicoes r ON e.requisicao_id = r.id
+                        ORDER BY t.nome ASC, e.prioridade ASC
+                    """
+                    df_monitoramento = pd.read_sql(query_escolhas, conn)
+                    if df_monitoramento.empty:
+                        st.info("💡 Nenhum trabalhador lançou escolhas para este turno ainda.")
+                    else:
+                        st.dataframe(df_monitoramento, use_container_width=True)
+
             # --- TRATAMENTO ROBUSTO E SALVAMENTO DE DADOS ---
             if df_para_salvar is not None:
                 st.write("### Prévia dos Dados Identificados:")
@@ -215,17 +235,11 @@ if check_password():
                 col_btn_cancela, col_btn_envia = st.columns([10, 1])
                 if col_btn_envia.button("Enviar", type="primary", use_container_width=True):
                     try:
-                        # Força colunas em minúsculo e remove espaços nas pontas
                         df_para_salvar.columns = df_para_salvar.columns.str.strip().str.lower()
-                        
-                        # Dicionário inteligente para remapear colunas com acentos/erros comuns do Excel
                         mapeamento_colunas = {
-                            'função': 'funcao',
-                            'matrícula': 'matricula',
-                            'câmbio chefe básico': 'cambio_chefe_basico',
-                            'câmbio chefe especial': 'cambio_chefe_especial',
-                            'câmbio rodízio': 'cambio_rodizio',
-                            'câmbio acordo': 'cambio_acordo'
+                            'função': 'funcao', 'matrícula': 'matricula',
+                            'câmbio chefe básico': 'cambio_chefe_basico', 'câmbio chefe especial': 'cambio_chefe_especial',
+                            'câmbio rodízio': 'cambio_rodizio', 'câmbio acordo': 'cambio_acordo'
                         }
                         df_para_salvar.rename(columns=mapeamento_colunas, inplace=True)
 
@@ -242,9 +256,9 @@ if check_password():
                         st.success(f"Dados de {tipo_painel} importados com sucesso!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Erro de estrutura: Garanta que as colunas sejam condizentes com a tabela abaixo. Erro técnico: {e}")
+                        st.error(f"Erro de estrutura: Verifique as colunas. Erro: {e}")
 
-            # Seção Inferior: Opções de Campos (Idêntica ao rodapé da imagem)
+            # Seção Inferior: Opções de Campos
             st.write("---")
             st.subheader("📋 Opções de Campos Aceitos")
             if tipo_painel == "Navios":
@@ -253,6 +267,7 @@ if check_password():
                     {"CAMPO": "funcao", "OBRIGATÓRIO": "✔", "ACESSADOR": "—", "DESCRIÇÃO": "Função (RODÍZIO, CHEFE BÁSICO, CHEFE ESPECIAL, ACORDO)"},
                     {"CAMPO": "vagas", "OBRIGATÓRIO": "✔", "ACESSADOR": "—", "DESCRIÇÃO": "Quantidade de vagas disponíveis (Número)"}
                 ]
+                st.table(pd.DataFrame(dados_campos))
             else:
                 dados_campos = [
                     {"CAMPO": "matricula", "OBRIGATÓRIO": "✔", "ACESSADOR": "—", "DESCRIÇÃO": "Número de matrícula único (Número)"},
@@ -262,9 +277,9 @@ if check_password():
                     {"CAMPO": "cambio_rodizio", "OBRIGATÓRIO": "✔", "ACESSADOR": "—", "DESCRIÇÃO": "Data do câmbio (AAAA-MM-DD)"},
                     {"CAMPO": "cambio_acordo", "OBRIGATÓRIO": "✔", "ACESSADOR": "—", "DESCRIÇÃO": "Data do câmbio (AAAA-MM-DD)"}
                 ]
-            st.table(pd.DataFrame(dados_campos))
+                st.table(pd.DataFrame(dados_campos))
 
-            # Exibição do Banco Atual embaixo
+            # Exibição do Banco Atual com Sistema de Exclusão Individual
             st.subheader(f"Registros Atuais de {tipo_painel}")
             if tipo_painel == "Navios":
                 df_req = pd.read_sql("SELECT id, navio, funcao, vagas FROM requisicoes", conn)
@@ -273,7 +288,19 @@ if check_password():
                     conn.execute("DELETE FROM requisicoes"); conn.execute("DELETE FROM escolhas"); conn.commit(); st.rerun()
             else:
                 df_total = pd.read_sql("SELECT * FROM trabalhadores ORDER BY nome ASC", conn)
-                st.dataframe(df_total, use_container_width=True)
+                
+                # Sistema interativo para excluir item por item na listagem
+                for index, row in df_total.iterrows():
+                    col_nome, col_mat, col_lixo = st.columns([6, 2, 1])
+                    col_nome.write(f"👤 **{row['nome']}**")
+                    col_mat.write(f"Matrícula: {row['matricula']}")
+                    if col_lixo.button("🗑️ Excluir", key=f"del_{row['matricula']}"):
+                        conn.execute("DELETE FROM trabalhadores WHERE matricula = ?", (row['matricula'],))
+                        conn.execute("DELETE FROM escolhas WHERE matricula = ?", (row['matricula'],))
+                        conn.commit()
+                        st.success(f"Trabalhador {row['nome']} removido!")
+                        st.rerun()
+                st.write("---")
 
         # 2. FECHAMENTO DA ESCALA
         elif opc_admin == "⚙️ Fechamento da Escala":
