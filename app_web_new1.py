@@ -6,7 +6,7 @@ from fpdf import FPDF
 import io
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Sistema OGMO-ES v7.5", layout="wide", page_icon="🚢")
+st.set_page_config(page_title="Sistema OGMO-ES v7.6", layout="wide", page_icon="🚢")
 
 # --- 2. SISTEMA DE SENHA ---
 SENHA_ACESSO = "ogmo123"
@@ -44,23 +44,19 @@ if check_password():
 
     conn = init_db()
 
-    # --- 4. ENGINE TRATAMENTO DE TEXTO/PLANILHA (IGUAL À IMAGEM) ---
+    # --- 4. ENGINE DE TRATAMENTO DE TEXTO/PLANILHA ---
     def processar_texto_puro(texto, separador, formato):
         if not texto.strip():
             return None
         try:
-            # Converte a string colada em um arquivo virtual na memória
             data_io = io.StringIO(texto.strip())
-            
-            # Define o separador
             sep = ',' if separador == "Vírgula" else ';' if separador == "Ponto e Vírgula" else '\t'
             
             if formato == "CSV":
                 return pd.read_csv(data_io, sep=sep, encoding='utf-8')
             elif formato == "JSON":
                 return pd.read_json(data_io)
-            else: # Detecção automática de CSV text/tabulado
-                # Se contiver tabulação (geralmente quando copia do Excel e cola direto)
+            else:
                 if '\t' in texto:
                     return pd.read_csv(data_io, sep='\t')
                 return pd.read_csv(data_io, sep=None, engine='python')
@@ -82,7 +78,7 @@ if check_password():
             file.seek(0)
             return pd.read_csv(file, sep=None, engine='python', encoding='iso-8859-1')
 
-    # --- 5. FUNÇÃO PDF ---
+    # --- 5. FUNÇÃO PARA GERAR PDF ---
     def exportar_pdf(dados):
         pdf = FPDF()
         pdf.add_page()
@@ -165,19 +161,18 @@ if check_password():
     elif perfil == "⚙️ Painel do Administrador":
         opc_admin = st.sidebar.radio("Funções Administrativas:", ["🚢 Requisições de Navios", "⚙️ Fechamento da Escala", "👤 Gestão de Trabalhadores"])
 
-        # INTERFACE DA IMAGEM IMPLEMENTADA AQUI (NAVIOS OU TRABALHADORES)
         if opc_admin == "🚢 Requisições de Navios" or opc_admin == "👤 Gestão de Trabalhadores":
             tipo_painel = "Navios" if opc_admin == "🚢 Requisições de Navios" else "Trabalhadores"
             st.header(f"⚙️ Gerenciamento e Carga de {tipo_painel}")
 
-            # Criando o Menu de Abas idêntico ao topo da sua imagem
+            # Menu de Abas (Igual à sua imagem)
             aba1, aba2, aba3 = st.tabs(["📋 Importação Direta (Texto)", "📂 Carregar Arquivo (Excel/CSV)", "➕ Inclusão Manual"])
             
             df_para_salvar = None
 
             with aba1:
                 st.write("Cole os dados copiados diretamente das suas colunas do Excel ou bloco de notas:")
-                texto_colado = st.text_area("Data", height=150, help="Insira dados em formato estruturado (colunas separadas por espaço ou tabulação)", placeholder="Insira os dados aqui...", key=f"txt_{tipo_painel}")
+                texto_colado = st.text_area("Data", height=150, help="Insira dados em formato estruturado", placeholder="Insira os dados aqui...", key=f"txt_{tipo_painel}")
                 
                 c1, c2 = st.columns(2)
                 formato_sel = c1.selectbox("Format*", ["Detecção automática", "CSV", "JSON"], key=f"f_{tipo_painel}")
@@ -212,7 +207,7 @@ if check_password():
                             conn.execute("INSERT OR REPLACE INTO trabalhadores VALUES (?,?,?,?,?,?)", (m, n, cb, ce, cr, ca))
                             conn.commit(); st.success("Salvo!"); st.rerun()
 
-            # Se houver dados detectados nas abas 1 ou 2, mostra o botão "Enviar" estilizado como na imagem
+            # --- TRATAMENTO ROBUSTO E SALVAMENTO DE DADOS ---
             if df_para_salvar is not None:
                 st.write("### Prévia dos Dados Identificados:")
                 st.dataframe(df_para_salvar.head(5), use_container_width=True)
@@ -220,6 +215,20 @@ if check_password():
                 col_btn_cancela, col_btn_envia = st.columns([10, 1])
                 if col_btn_envia.button("Enviar", type="primary", use_container_width=True):
                     try:
+                        # Força colunas em minúsculo e remove espaços nas pontas
+                        df_para_salvar.columns = df_para_salvar.columns.str.strip().str.lower()
+                        
+                        # Dicionário inteligente para remapear colunas com acentos/erros comuns do Excel
+                        mapeamento_colunas = {
+                            'função': 'funcao',
+                            'matrícula': 'matricula',
+                            'câmbio chefe básico': 'cambio_chefe_basico',
+                            'câmbio chefe especial': 'cambio_chefe_especial',
+                            'câmbio rodízio': 'cambio_rodizio',
+                            'câmbio acordo': 'cambio_acordo'
+                        }
+                        df_para_salvar.rename(columns=mapeamento_colunas, inplace=True)
+
                         if tipo_painel == "Navios":
                             for _, r in df_para_salvar.iterrows():
                                 conn.execute("INSERT INTO requisicoes (navio, funcao, vagas) VALUES (?,?,?)", 
@@ -233,7 +242,7 @@ if check_password():
                         st.success(f"Dados de {tipo_painel} importados com sucesso!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Erro ao salvar dados no banco: Verifique os nomes das colunas. Erro: {e}")
+                        st.error(f"Erro de estrutura: Garanta que as colunas sejam condizentes com a tabela abaixo. Erro técnico: {e}")
 
             # Seção Inferior: Opções de Campos (Idêntica ao rodapé da imagem)
             st.write("---")
@@ -256,7 +265,7 @@ if check_password():
             st.table(pd.DataFrame(dados_campos))
 
             # Exibição do Banco Atual embaixo
-            st.subheader(f"Registros Atuais de {tipo_painel} no Sistema")
+            st.subheader(f"Registros Atuais de {tipo_painel}")
             if tipo_painel == "Navios":
                 df_req = pd.read_sql("SELECT id, navio, funcao, vagas FROM requisicoes", conn)
                 st.dataframe(df_req, use_container_width=True)
