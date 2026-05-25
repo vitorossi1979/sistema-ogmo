@@ -155,8 +155,8 @@ if check_password():
             n = st.text_input("Nome").upper()
             d = date.today()
             c1, c2, c3, c4 = st.columns(4)
-            cb = c1.date_input("Câmbio Básico", d)
-            ce = c2.date_input("Câmbio Especial", d)
+            cb = c1.date_input("Câmbio Chefe Básico", d)
+            ce = c2.date_input("Câmbio Chefe Especial", d)
             cr = c3.date_input("Câmbio Rodízio", d)
             ca = c4.date_input("Câmbio Acordo", d)
             if st.form_submit_button("Salvar Trabalhador"):
